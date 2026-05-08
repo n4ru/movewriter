@@ -20,11 +20,11 @@ APPLOAD_SO_PATH = "/home/root/xovi/extensions.d/appload.so"
 APPLOAD_SHIMS_DIR = "/home/root/shims"
 APPLOAD_GITHUB_URL = "https://github.com/asivery/rm-appload/releases/latest/download/appload-aarch64.zip"
 
-# XOVI per-service paths — xovi/start sets XOVI_ROOT to the per-service exthome,
-# so qt-resource-rebuilder reads the hashtable from there, not the global path.
+# XOVI per-service paths — xovi/start sets XOVI_ROOT to the per-service path.
+# The per-service qt-resource-rebuilder dir is symlinked to the global one so
+# all qmd patches and the hashtab are visible in both debug and systemd modes.
 XOVI_PER_SERVICE_EXT_DIR = "/home/root/xovi/services/xochitl.service/extensions.d"
 GLOBAL_HASHTAB = "/home/root/xovi/exthome/qt-resource-rebuilder/hashtab"
-PER_SERVICE_HASHTAB = "/home/root/xovi/services/xochitl.service/exthome/qt-resource-rebuilder/hashtab"
 WATCHDOG_DROPIN_DIR = "/usr/lib/systemd/system/xochitl.service.d"
 WATCHDOG_DROPIN_PATH = f"{WATCHDOG_DROPIN_DIR}/zz-movewriter-overrides.conf"
 AUTOSTART_SERVICE_PATH = "/usr/lib/systemd/system/movewriter-xovi.service"
@@ -327,12 +327,15 @@ def _activate_xovi(ssh, say):
     offsets so AppLoad can inject its hamburger-menu entry.  It must be rebuilt
     whenever AppLoad or xochitl changes.
 
-    xovi/start sets XOVI_ROOT to the per-service exthome, so qt-resource-rebuilder
-    reads the hashtable from the per-service path — NOT the global one we pass to
-    QMLDIFF_HASHTAB_CREATE.  We copy the freshly built table to both locations so
-    it is found in either XOVI mode.
+    xovi/start sets XOVI_ROOT to the per-service path, so XOVI reads qmd patch
+    files and the hashtable from there — NOT the global exthome.  We symlink the
+    per-service qt-resource-rebuilder directory to the global one so all qmd files
+    (installed by vellum for any extension) are automatically visible, and future
+    extensions installed via reManager are picked up without re-running the installer.
     """
     XOVI_SO = "/home/root/xovi/xovi.so"
+    GLOBAL_QRR_DIR = "/home/root/xovi/exthome/qt-resource-rebuilder"
+    PER_SERVICE_QRR_DIR = "/home/root/xovi/services/xochitl.service/exthome/qt-resource-rebuilder"
 
     say("Rebuilding XOVI hashtable for AppLoad (~30-60s)...")
     # A background watchdog kills xochitl after 90s in case XOVI freezes it
@@ -342,8 +345,8 @@ def _activate_xovi(ssh, say):
         "umount /opt 2>/dev/null; "
         "systemctl stop xochitl; sleep 2; "
         "kill $(pidof xochitl) 2>/dev/null || true; "
-        f"mkdir -p $(dirname {GLOBAL_HASHTAB}) $(dirname {PER_SERVICE_HASHTAB}); "
-        f"rm -f {GLOBAL_HASHTAB} {PER_SERVICE_HASHTAB}; "
+        f"mkdir -p {GLOBAL_QRR_DIR}; "
+        f"rm -f {GLOBAL_HASHTAB}; "
         "(sleep 90 && kill $(pidof xochitl) 2>/dev/null) & WDOG=$!; "
         f"QMLDIFF_HASHTAB_CREATE={GLOBAL_HASHTAB} "
         "QML_DISABLE_DISK_CACHE=1 "
@@ -352,12 +355,22 @@ def _activate_xovi(ssh, say):
         "while IFS= read line; do "
         "  echo \"$line\"; "
         f"  case \"$line\" in *'Hashtab saved'*) "
-        f"    cp {GLOBAL_HASHTAB} {PER_SERVICE_HASHTAB} 2>/dev/null || true; "
         "    kill $(pidof xochitl) 2>/dev/null; break;; "
         "  esac; "
         "done; "
         "kill $WDOG 2>/dev/null || true",
         timeout=120,
+    )
+
+    # Symlink the per-service qt-resource-rebuilder dir to the global one.
+    # This makes all qmd extension patches visible to XOVI when running via
+    # systemd (XOVI_ROOT points to the per-service path), and means any
+    # extension the user later installs via reManager is picked up automatically.
+    ssh.exec(
+        f"rm -rf {PER_SERVICE_QRR_DIR} && "
+        f"mkdir -p $(dirname {PER_SERVICE_QRR_DIR}) && "
+        f"ln -sf {GLOBAL_QRR_DIR} {PER_SERVICE_QRR_DIR}",
+        timeout=5,
     )
 
     # Launch xovi/start in the background — it restarts xochitl which may
