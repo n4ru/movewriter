@@ -349,13 +349,17 @@ def _activate_xovi(ssh, say):
         timeout=180,
     )
 
-    say("Starting XOVI (AppLoad will appear in hamburger menu)...")
+    # Launch xovi/start in the background — it restarts xochitl which may
+    # prompt for a PIN, so we must not wait for it in the foreground or the
+    # SSH session blocks indefinitely.  The autostart service handles any
+    # failure on the next reboot via the pidof safety-net fallback.
+    say("Activating XOVI — device will restart xochitl shortly...")
     ssh.exec(
         "umount /opt 2>/dev/null; "
-        "bash /home/root/xovi/start; "
-        "sleep 5; "
+        "nohup bash /home/root/xovi/start >/tmp/xovi-start.log 2>&1 & "
+        "sleep 2; "
         "mount -a 2>/dev/null",
-        timeout=60,
+        timeout=15,
     )
 
 
