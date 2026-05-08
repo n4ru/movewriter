@@ -18,7 +18,7 @@ XOVI_DIR = "/home/root/xovi"
 APPLOAD_DIR = "/home/root/xovi/extensions.d/appload"  # legacy constant
 APPLOAD_SO_PATH = "/home/root/xovi/extensions.d/appload.so"
 APPLOAD_SHIMS_DIR = "/home/root/shims"
-APPLOAD_GITHUB_URL = "https://github.com/asivery/rm-appload/releases/download/v0.5.1/appload-aarch64.zip"
+APPLOAD_GITHUB_URL = "https://github.com/asivery/rm-appload/releases/latest/download/appload-aarch64.zip"
 
 # XOVI per-service paths — xovi/start sets XOVI_ROOT to the per-service exthome,
 # so qt-resource-rebuilder reads the hashtable from there, not the global path.
@@ -250,7 +250,7 @@ def _install_appload_direct(ssh, say):
     before the Vellum package is updated). The zip contains appload.so and
     qtfb shim libraries; we place them exactly where Vellum would.
     """
-    say("Installing AppLoad from GitHub (Vellum package not yet updated for 3.27)...")
+    say("Installing AppLoad latest release from GitHub...")
     ssh.exec(f"mkdir -p /tmp/appload-dl {XOVI_DIR}/extensions.d {APPLOAD_SHIMS_DIR}", timeout=5)
     out, err, code = ssh.exec(
         f"wget --no-check-certificate -O /tmp/appload-dl/appload.zip '{APPLOAD_GITHUB_URL}'",
