@@ -271,19 +271,18 @@ def _install_appload_direct(ssh, say):
 
 
 def _ensure_appload(ssh, say):
-    if not _appload_present(ssh):
-        say("Installing AppLoad...")
-        # Refresh package index first — a 3.27-compatible package may have been
-        # published since the last sync, and this is faster than direct download.
-        ssh.exec("vellum update 2>/dev/null || true", timeout=30)
-        ssh.exec("vellum add appload 2>&1 || true", timeout=180)
-        if not _appload_present(ssh):
-            # Vellum's OS gate still blocking — install directly from GitHub.
-            _install_appload_direct(ssh, say)
+    # Always update AppLoad — an installed-but-outdated binary (e.g. v0.5.1)
+    # will crash on newer firmware even though the file exists.  Try vellum
+    # first; fall back to the latest GitHub release every time.
+    say("Updating AppLoad...")
+    ssh.exec("vellum update 2>/dev/null || true", timeout=30)
+    ssh.exec("vellum add appload 2>&1 || true", timeout=180)
+    # Always pull latest from GitHub — overwrites whatever is installed so we
+    # are guaranteed to have a firmware-compatible version.
+    _install_appload_direct(ssh, say)
 
-    # xovi/start may set XOVI_ROOT to the per-service directory, so XOVI may
-    # load extensions from there instead of the global extensions.d. Mirror
-    # appload.so to both locations so it's found regardless of XOVI mode.
+    # Mirror appload.so to the per-service extensions dir as well — xovi/start
+    # may set XOVI_ROOT to the per-service path and load extensions from there.
     ssh.exec(
         f"mkdir -p {XOVI_PER_SERVICE_EXT_DIR} && "
         f"cp {APPLOAD_SO_PATH} {XOVI_PER_SERVICE_EXT_DIR}/appload.so 2>/dev/null || true",
