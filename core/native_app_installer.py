@@ -13,9 +13,18 @@ import os
 import sys
 
 # Paths on-device
-DEST_DIR = "/home/root/xovi/exthome/appload/movewriter"
+DEST_DIR = "/home/root/xovi/services/xochitl.service/exthome/appload/movewriter"
 XOVI_DIR = "/home/root/xovi"
-APPLOAD_DIR = "/home/root/xovi/extensions.d/appload"
+APPLOAD_DIR = "/home/root/xovi/extensions.d/appload"  # legacy constant
+APPLOAD_SO_PATH = "/home/root/xovi/extensions.d/appload.so"
+APPLOAD_SHIMS_DIR = "/home/root/shims"
+APPLOAD_GITHUB_URL = "https://github.com/asivery/rm-appload/releases/download/v0.5.1/appload-aarch64.zip"
+
+# XOVI per-service paths — xovi/start sets XOVI_ROOT to the per-service exthome,
+# so qt-resource-rebuilder reads the hashtable from there, not the global path.
+XOVI_PER_SERVICE_EXT_DIR = "/home/root/xovi/services/xochitl.service/extensions.d"
+GLOBAL_HASHTAB = "/home/root/xovi/exthome/qt-resource-rebuilder/hashtab"
+PER_SERVICE_HASHTAB = "/home/root/xovi/services/xochitl.service/exthome/qt-resource-rebuilder/hashtab"
 WATCHDOG_DROPIN_DIR = "/usr/lib/systemd/system/xochitl.service.d"
 WATCHDOG_DROPIN_PATH = f"{WATCHDOG_DROPIN_DIR}/zz-movewriter-overrides.conf"
 AUTOSTART_SERVICE_PATH = "/usr/lib/systemd/system/movewriter-xovi.service"
@@ -91,6 +100,7 @@ def install(ssh, status_cb=None):
     _ensure_entware(ssh, say)
     _ensure_python3(ssh, say)
     _ensure_vellum(ssh, say)
+    _vellum_upgrade(ssh, say)
     _ensure_xovi(ssh, say)
     _ensure_appload(ssh, say)
 
@@ -104,10 +114,10 @@ def install(ssh, status_cb=None):
     say("Setting up boot autostart...")
     _install_autostart(ssh)
 
-    say("Restarting Move interface...")
-    # systemctl restart xochitl — fire and forget with & so it doesn't kill
-    # the SSH command mid-execution. The UI briefly flickers.
-    ssh.exec("(sleep 1 && systemctl restart xochitl) &", timeout=5)
+    # Always rebuild hashtable — needed whenever AppLoad or xochitl changes,
+    # and must be at both global and per-service paths since xovi/start sets
+    # XOVI_ROOT to the per-service exthome.
+    _activate_xovi(ssh, say)
 
     say("Install complete")
 
@@ -185,31 +195,87 @@ def _ensure_vellum(ssh, say):
         raise RuntimeError("Vellum install failed")
 
 
+def _vellum_upgrade(ssh, say):
+    """Run 'vellum upgrade' to sync packages to the current firmware.
+
+    Required after an OS upgrade — Vellum blocks add/update until packages
+    are re-synced. Can take several minutes on first run.
+    """
+    say("Syncing packages to firmware (may take a few minutes)...")
+    out, err, code = ssh.exec("vellum upgrade 2>&1", timeout=360)
+    combined = (out or "") + (err or "")
+    if code != 0 and "already" not in combined.lower() and "up to date" not in combined.lower():
+        raise RuntimeError(f"vellum upgrade failed: {combined.strip()}")
+
+
 def _ensure_xovi(ssh, say):
     _, _, code = ssh.exec(f"test -d {XOVI_DIR}", timeout=5)
-    if code == 0:
-        return
-    say("Installing XOVI...")
-    ssh.exec("vellum add xovi", timeout=180)
-    _, _, code = ssh.exec(f"test -d {XOVI_DIR}", timeout=5)
     if code != 0:
-        raise RuntimeError("XOVI install failed")
+        say("Installing XOVI...")
+        ssh.exec("vellum add xovi", timeout=180)
+        _, _, code = ssh.exec(f"test -d {XOVI_DIR}", timeout=5)
+        if code != 0:
+            raise RuntimeError("XOVI install failed")
+
+    # xovi-extensions provides qt-resource-rebuilder, which AppLoad requires to
+    # inject its hamburger-menu entry into xochitl.  Install even on re-runs so
+    # a fresh 3.27 device (where `vellum add appload` was blocked) gets it.
+    say("Installing XOVI extensions (qt-resource-rebuilder)...")
+    ssh.exec("vellum add xovi-extensions 2>&1 || true", timeout=180)
+
+
+def _appload_present(ssh):
+    """Return True if AppLoad's extension .so is installed."""
+    _, _, code = ssh.exec(f"test -f {APPLOAD_SO_PATH}", timeout=5)
+    return code == 0
+
+
+def _install_appload_direct(ssh, say):
+    """Download AppLoad from GitHub and install it directly.
+
+    Used when Vellum's OS compatibility gate blocks installation (e.g. 3.27
+    before the Vellum package is updated). The zip contains appload.so and
+    qtfb shim libraries; we place them exactly where Vellum would.
+    """
+    say("Installing AppLoad from GitHub (Vellum package not yet updated for 3.27)...")
+    ssh.exec(f"mkdir -p /tmp/appload-dl {XOVI_DIR}/extensions.d {APPLOAD_SHIMS_DIR}", timeout=5)
+    out, err, code = ssh.exec(
+        f"wget --no-check-certificate -O /tmp/appload-dl/appload.zip '{APPLOAD_GITHUB_URL}'",
+        timeout=120,
+    )
+    if code != 0:
+        raise RuntimeError(f"AppLoad download failed: {(err or out or '').strip()}")
+    out, err, code = ssh.exec(
+        "cd /tmp/appload-dl && unzip -o appload.zip && "
+        f"cp appload.so {APPLOAD_SO_PATH} && "
+        f"cp qtfb-shim.so {APPLOAD_SHIMS_DIR}/qtfb-shim.so 2>/dev/null || true; "
+        f"cp qtfb-shim-32bit.so {APPLOAD_SHIMS_DIR}/qtfb-shim-32bit.so 2>/dev/null || true; "
+        "rm -rf /tmp/appload-dl",
+        timeout=30,
+    )
+    if not _appload_present(ssh):
+        raise RuntimeError(f"AppLoad direct install failed: {(err or out or '').strip()}")
 
 
 def _ensure_appload(ssh, say):
-    _, _, code = ssh.exec(f"test -d {APPLOAD_DIR}", timeout=5)
-    if code == 0:
-        return
-    say("Installing AppLoad...")
-    ssh.exec("vellum add appload", timeout=180)
-    _, _, code = ssh.exec(f"test -d {APPLOAD_DIR}", timeout=5)
-    if code != 0:
-        # Try alternate path check
-        _, _, code = ssh.exec(
-            f"ls {XOVI_DIR}/extensions.d/ | grep -qi appload", timeout=5
-        )
-        if code != 0:
-            raise RuntimeError("AppLoad install failed")
+    if not _appload_present(ssh):
+        say("Installing AppLoad...")
+        # Refresh package index first — a 3.27-compatible package may have been
+        # published since the last sync, and this is faster than direct download.
+        ssh.exec("vellum update 2>/dev/null || true", timeout=30)
+        ssh.exec("vellum add appload 2>&1 || true", timeout=180)
+        if not _appload_present(ssh):
+            # Vellum's OS gate still blocking — install directly from GitHub.
+            _install_appload_direct(ssh, say)
+
+    # xovi/start may set XOVI_ROOT to the per-service directory, so XOVI may
+    # load extensions from there instead of the global extensions.d. Mirror
+    # appload.so to both locations so it's found regardless of XOVI mode.
+    ssh.exec(
+        f"mkdir -p {XOVI_PER_SERVICE_EXT_DIR} && "
+        f"cp {APPLOAD_SO_PATH} {XOVI_PER_SERVICE_EXT_DIR}/appload.so 2>/dev/null || true",
+        timeout=5,
+    )
 
 
 def _upload_app(ssh, root):
@@ -240,6 +306,51 @@ def _upload_app(ssh, root):
             ssh.upload_bytes(data, remote)
 
     ssh.exec(f"chmod +x {DEST_DIR}/backend/entry", timeout=5)
+
+
+def _activate_xovi(ssh, say):
+    """Rebuild the XOVI hashtable then re-run xovi/start so AppLoad appears in the menu.
+
+    The hashtable (built by qt-resource-rebuilder) maps xochitl's QML resource
+    offsets so AppLoad can inject its hamburger-menu entry.  It must be rebuilt
+    whenever AppLoad or xochitl changes.
+
+    xovi/start sets XOVI_ROOT to the per-service exthome, so qt-resource-rebuilder
+    reads the hashtable from the per-service path — NOT the global one we pass to
+    QMLDIFF_HASHTAB_CREATE.  We copy the freshly built table to both locations so
+    it is found in either XOVI mode.
+    """
+    XOVI_SO = "/home/root/xovi/xovi.so"
+
+    say("Rebuilding XOVI hashtable for AppLoad (~30-60s)...")
+    ssh.exec(
+        "umount /opt 2>/dev/null; "
+        "systemctl stop xochitl; sleep 2; "
+        "kill $(pidof xochitl) 2>/dev/null || true; "
+        f"mkdir -p $(dirname {GLOBAL_HASHTAB}) $(dirname {PER_SERVICE_HASHTAB}); "
+        f"rm -f {GLOBAL_HASHTAB} {PER_SERVICE_HASHTAB}; "
+        f"QMLDIFF_HASHTAB_CREATE={GLOBAL_HASHTAB} "
+        "QML_DISABLE_DISK_CACHE=1 "
+        f"LD_PRELOAD={XOVI_SO} "
+        "/usr/bin/xochitl 2>&1 | "
+        "while IFS= read line; do "
+        "  echo \"$line\"; "
+        f"  case \"$line\" in *'Hashtab saved'*) "
+        f"    cp {GLOBAL_HASHTAB} {PER_SERVICE_HASHTAB} 2>/dev/null || true; "
+        "    kill $(pidof xochitl) 2>/dev/null; break;; "
+        "  esac; "
+        "done",
+        timeout=180,
+    )
+
+    say("Starting XOVI (AppLoad will appear in hamburger menu)...")
+    ssh.exec(
+        "umount /opt 2>/dev/null; "
+        "bash /home/root/xovi/start; "
+        "sleep 5; "
+        "mount -a 2>/dev/null",
+        timeout=60,
+    )
 
 
 def _install_watchdog_dropin(ssh):

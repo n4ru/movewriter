@@ -3,7 +3,7 @@
 set -e
 
 DEVICE="${1:-10.11.99.1}"
-DEST="/home/root/xovi/exthome/appload/movewriter"
+DEST="/home/root/xovi/services/xochitl.service/exthome/appload/movewriter"
 
 echo "Deploying to $DEVICE:$DEST ..."
 

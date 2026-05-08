@@ -27,9 +27,35 @@ LAYOUT_FILE = "/home/root/.movewriter-layout"
 SCRIPT_DIR = "/home/root/.movewriter"
 
 # US keymap location in libepaper.so (ARM64, little-endian)
+# Fallback for 3.22/3.26 — _find_keymap_region() auto-detects for newer firmware.
 US_KEYMAP_OFFSET = 0x0250b0
 ENTRY_SIZE = 16
 ENTRY_COUNT = 211
+
+
+def _find_keymap_region(data):
+    """Locate the US keymap table in libepaper.so for any firmware version.
+
+    Scans at 16-byte strides for known US letter entries (HID keycodes 4-7
+    mapping to a/b/c/d). Falls back to the hardcoded 3.22/3.26 offset on
+    failure. Returns (start_offset, scan_count).
+    """
+    needle_a = struct.pack('<HH', 4, 0x61)  # HID 4 = 'a'
+    needle_b = struct.pack('<HH', 5, 0x62)  # HID 5 = 'b'
+    needle_c = struct.pack('<HH', 6, 0x63)  # HID 6 = 'c'
+    needle_d = struct.pack('<HH', 7, 0x64)  # HID 7 = 'd'
+
+    scan_window = ENTRY_COUNT * ENTRY_SIZE
+    for pos in range(0x10000, len(data) - scan_window, ENTRY_SIZE):
+        if data[pos:pos + 4] == needle_a:
+            region = data[max(0, pos - scan_window):pos + scan_window]
+            if needle_b in region and needle_c in region and needle_d in region:
+                start = max(0, pos - scan_window)
+                log.info("Keymap detected at ~0x%x (anchor at 0x%x)", start, pos)
+                return start, ENTRY_COUNT * 2 + 1
+
+    log.warning("Keymap auto-detect failed; using hardcoded 0x%x", US_KEYMAP_OFFSET)
+    return US_KEYMAP_OFFSET, ENTRY_COUNT
 
 
 def _run(cmd, timeout=10):
@@ -70,8 +96,11 @@ def _patch_binary(data, layout_key):
 
     # First pass: group binary entries by keycode
     entries_by_kc = {}
-    for i in range(ENTRY_COUNT):
-        offset = US_KEYMAP_OFFSET + i * ENTRY_SIZE
+    scan_start, scan_count = _find_keymap_region(data)
+    for i in range(scan_count):
+        offset = scan_start + i * ENTRY_SIZE
+        if offset + ENTRY_SIZE > len(data):
+            break
         keycode = struct.unpack_from('<H', data, offset)[0]
         if keycode in targets:
             mod = data[offset + 8]
