@@ -56,6 +56,15 @@ log "autostart: running xovi/start"
 bash /home/root/xovi/start >> "$LOGFILE" 2>&1 || log "autostart: xovi/start exited non-zero"
 sleep 5
 
+# Safety net: if xochitl is not running after xovi/start (script failed or
+# produced no restart), bring it up unconditionally so the device is never
+# left with a dead UI.
+if ! pidof xochitl > /dev/null 2>&1; then
+    log "autostart: xochitl not running after xovi/start — starting directly"
+    systemctl start xochitl 2>/dev/null || true
+    sleep 3
+fi
+
 # Remount /opt so entware is available for the native app backend.
 mount -a 2>/dev/null && log "autostart: remounted filesystems"
 
