@@ -15,7 +15,7 @@
 set -e
 
 DEVICE="${1:-10.11.99.1}"
-DEST="/home/root/xovi/exthome/appload/movewriter"
+DEST="/home/root/xovi/services/xochitl.service/exthome/appload/movewriter"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Colors for terminal output
@@ -109,28 +109,82 @@ else
     fi
 fi
 
+# ── Step 5b: Install xovi-extensions (provides qt-resource-rebuilder) ─
+step "Installing XOVI extensions"
+
+# qt-resource-rebuilder is required for AppLoad to inject its hamburger-menu
+# entry into xochitl.  It ships in the xovi-extensions Vellum package.
+run_on_device "vellum add xovi-extensions 2>/dev/null || true"
+info "XOVI extensions up-to-date"
+
 # ── Step 6: Install AppLoad extension if missing ───────────
 step "Checking for AppLoad"
 
-APPLOAD_DIR="/home/root/xovi/extensions.d/appload"
-if run_on_device "test -d $APPLOAD_DIR"; then
+APPLOAD_SO="/home/root/xovi/extensions.d/appload.so"
+APPLOAD_PER_SERVICE="/home/root/xovi/services/xochitl.service/extensions.d/appload.so"
+
+if run_on_device "test -f $APPLOAD_SO"; then
     info "AppLoad already installed"
 else
     warn "AppLoad not found — installing via Vellum..."
-    run_on_device "vellum add appload"
-    if run_on_device "test -d $APPLOAD_DIR"; then
-        info "AppLoad installed successfully"
+    run_on_device "vellum update 2>/dev/null || true"
+    run_on_device "vellum add appload 2>/dev/null || true"
+    if run_on_device "test -f $APPLOAD_SO"; then
+        info "AppLoad installed via Vellum"
     else
-        # Try alternative location check
-        if run_on_device "ls /home/root/xovi/extensions.d/ | grep -qi appload"; then
-            info "AppLoad installed (alternate path)"
+        warn "Vellum blocked (OS 3.27 not yet supported) — installing from GitHub..."
+        run_on_device "
+            mkdir -p /tmp/appload-dl /home/root/xovi/extensions.d /home/root/shims
+            wget --no-check-certificate -O /tmp/appload-dl/appload.zip \
+                'https://github.com/asivery/rm-appload/releases/download/v0.5.1/appload-aarch64.zip'
+            cd /tmp/appload-dl && unzip -o appload.zip
+            cp appload.so $APPLOAD_SO
+            cp qtfb-shim.so /home/root/shims/ 2>/dev/null || true
+            cp qtfb-shim-32bit.so /home/root/shims/ 2>/dev/null || true
+            rm -rf /tmp/appload-dl
+        "
+        if run_on_device "test -f $APPLOAD_SO"; then
+            info "AppLoad installed from GitHub"
         else
-            fail "AppLoad installation failed. Check https://github.com/rM-self-serve/appload for manual install"
+            fail "AppLoad installation failed. Install manually: https://github.com/asivery/rm-appload"
         fi
     fi
 fi
 
-# ── Step 7: Deploy MoveWriter app ──────────────────────────
+# Mirror appload.so to the per-service extensions dir — xovi/start may load from there.
+run_on_device "mkdir -p \$(dirname $APPLOAD_PER_SERVICE) && cp $APPLOAD_SO $APPLOAD_PER_SERVICE 2>/dev/null || true"
+info "AppLoad mirrored to per-service extensions dir"
+
+# ── Step 7: Rebuild XOVI hashtable ─────────────────────────
+step "Rebuilding XOVI hashtable (required for AppLoad menu entry)"
+
+# xovi/start sets XOVI_ROOT to the per-service exthome, so qt-resource-rebuilder
+# reads the hashtable from there.  Build at the global path and copy to both.
+GLOBAL_HASHTAB="/home/root/xovi/exthome/qt-resource-rebuilder/hashtab"
+PER_SERVICE_HASHTAB="/home/root/xovi/services/xochitl.service/exthome/qt-resource-rebuilder/hashtab"
+
+warn "Stopping xochitl and rebuilding hashtable (~30-60s)..."
+run_on_device "
+    umount /opt 2>/dev/null
+    systemctl stop xochitl
+    sleep 2
+    kill \$(pidof xochitl) 2>/dev/null || true
+    mkdir -p \$(dirname $GLOBAL_HASHTAB) \$(dirname $PER_SERVICE_HASHTAB)
+    rm -f $GLOBAL_HASHTAB $PER_SERVICE_HASHTAB
+    QMLDIFF_HASHTAB_CREATE=$GLOBAL_HASHTAB QML_DISABLE_DISK_CACHE=1 \
+        LD_PRELOAD=/home/root/xovi/xovi.so /usr/bin/xochitl 2>&1 | \
+        while IFS= read line; do
+            echo \"\$line\"
+            case \"\$line\" in *'Hashtab saved'*)
+                cp $GLOBAL_HASHTAB $PER_SERVICE_HASHTAB 2>/dev/null || true
+                kill \$(pidof xochitl) 2>/dev/null
+                break;;
+            esac
+        done
+"
+info "Hashtable rebuilt and copied to per-service path"
+
+# ── Step 8: Deploy MoveWriter app ──────────────────────────
 step "Deploying MoveWriter Native"
 
 run_on_device "mkdir -p $DEST/backend $DEST/qml/components $DEST/resources $DEST/tools"
@@ -174,12 +228,23 @@ run_on_device "chmod +x $DEST/backend/entry"
 
 info "MoveWriter deployed to $DEST"
 
+# ── Step 9: Activate XOVI (loads AppLoad into running xochitl) ─────────
+step "Activating XOVI"
+
+warn "Starting XOVI — AppLoad will appear in hamburger menu (~10s)..."
+run_on_device "
+    umount /opt 2>/dev/null
+    bash /home/root/xovi/start
+    sleep 5
+    mount -a 2>/dev/null
+"
+info "XOVI active — AppLoad loaded"
+
 # ── Done ───────────────────────────────────────────────────
 step "Setup complete!"
 echo ""
 echo "  MoveWriter Native is installed on your Move."
-echo "  To open it: on the Move, open AppLoad → MoveWriter"
+echo "  Open the hamburger menu (☰) on the Move → AppLoad → MoveWriter"
 echo ""
-echo "  If AppLoad doesn't appear, you may need to restart xochitl:"
-echo "    ssh root@$DEVICE 'systemctl restart xochitl'"
+echo "  AppLoad appears in the ☰ hamburger menu (top-right), NOT the sidebar."
 echo ""

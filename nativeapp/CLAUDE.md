@@ -1,11 +1,11 @@
 # MoveWriter Native
 
-Native on-device app for configuring Bluetooth keyboards on the reMarkable Move, running inside xochitl via the XOVI/AppLoad framework. **Working on firmware 3.22 and 3.26** as of v2.0.
+Native on-device app for configuring Bluetooth keyboards on the reMarkable Move, running inside xochitl via the XOVI/AppLoad framework. **Working on firmware 3.22, 3.26, and 3.27** as of v2.1.
 
 ## Target Device
 
 - **Model**: reMarkable Chiappa (reMarkable Move)
-- **Tested firmware**: 3.22.0.68, 3.26.0.68 (both working with current Vellum packages)
+- **Tested firmware**: 3.22.0.68, 3.26.0.68, 3.27.x (working with current Vellum packages)
 - **OS**: BusyBox-based Linux (NOT full GNU coreutils)
 - **Runtime**: xochitl Qt 6 + AppLoad extension
 - **Main app**: xochitl (systemd service) — this app runs INSIDE it
@@ -449,6 +449,14 @@ ssh root@10.11.99.1 "chmod +x $DEST/backend/entry"
 # Restart XOVI (required after resources.rcc changes)
 ssh root@10.11.99.1 "umount /opt 2>/dev/null; bash /home/root/xovi/start; sleep 3; mount -a 2>/dev/null"
 ```
+
+## Firmware 3.27 Status (WORKING)
+
+As of v2.1, 3.27 is supported:
+- Same Vellum packages as 3.26 (update with `vellum update appload && vellum update xovi-extensions`)
+- **Hashtable must be rebuilt** after upgrading from 3.26 — use `setup.sh` which does this automatically, or run the manual rebuild from XOVI Hashtable Rebuild section above
+- `libepaper.so` keymap offset changed in 3.27 — the layout patcher now auto-detects the offset by scanning for known US letter entries, so no manual offset update is needed for future firmware versions
+- **AppLoad install failed** on 3.27 was caused by: (1) wrong deploy path (`xovi/exthome/` vs `xovi/services/xochitl.service/exthome/`), and (2) stale hashtable after firmware upgrade. Both fixed.
 
 ## Firmware 3.26 Status (WORKING)
 
