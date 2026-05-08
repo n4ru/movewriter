@@ -223,10 +223,17 @@ def _ensure_xovi(ssh, say):
         if code != 0:
             raise RuntimeError("XOVI install failed")
 
+    # Update xovi and xovi-extensions to the latest firmware-compatible versions.
+    # xovi.so must match the running xochitl binary — a stale 3.26 build will
+    # freeze xochitl on 3.27.  Targeted 'vellum update' is more reliable than
+    # the full 'vellum upgrade' which can fail due to apk network errors.
+    say("Updating XOVI for current firmware...")
+    ssh.exec("vellum update xovi 2>&1 || true", timeout=180)
+
     # xovi-extensions provides qt-resource-rebuilder, which AppLoad requires to
-    # inject its hamburger-menu entry into xochitl.  Install even on re-runs so
-    # a fresh 3.27 device (where `vellum add appload` was blocked) gets it.
-    say("Installing XOVI extensions (qt-resource-rebuilder)...")
+    # inject its hamburger-menu entry into xochitl.
+    say("Updating XOVI extensions (qt-resource-rebuilder)...")
+    ssh.exec("vellum update xovi-extensions 2>&1 || true", timeout=180)
     ssh.exec("vellum add xovi-extensions 2>&1 || true", timeout=180)
 
 
@@ -329,12 +336,16 @@ def _activate_xovi(ssh, say):
     XOVI_SO = "/home/root/xovi/xovi.so"
 
     say("Rebuilding XOVI hashtable for AppLoad (~30-60s)...")
+    # A background watchdog kills xochitl after 90s in case XOVI freezes it
+    # (e.g. stale xovi.so on a newly upgraded firmware before vellum update
+    # takes effect).  Without this the pipeline read blocks until ssh timeout.
     ssh.exec(
         "umount /opt 2>/dev/null; "
         "systemctl stop xochitl; sleep 2; "
         "kill $(pidof xochitl) 2>/dev/null || true; "
         f"mkdir -p $(dirname {GLOBAL_HASHTAB}) $(dirname {PER_SERVICE_HASHTAB}); "
         f"rm -f {GLOBAL_HASHTAB} {PER_SERVICE_HASHTAB}; "
+        "(sleep 90 && kill $(pidof xochitl) 2>/dev/null) & WDOG=$!; "
         f"QMLDIFF_HASHTAB_CREATE={GLOBAL_HASHTAB} "
         "QML_DISABLE_DISK_CACHE=1 "
         f"LD_PRELOAD={XOVI_SO} "
@@ -345,8 +356,9 @@ def _activate_xovi(ssh, say):
         f"    cp {GLOBAL_HASHTAB} {PER_SERVICE_HASHTAB} 2>/dev/null || true; "
         "    kill $(pidof xochitl) 2>/dev/null; break;; "
         "  esac; "
-        "done",
-        timeout=180,
+        "done; "
+        "kill $WDOG 2>/dev/null || true",
+        timeout=120,
     )
 
     # Launch xovi/start in the background — it restarts xochitl which may
