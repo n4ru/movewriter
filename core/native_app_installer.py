@@ -200,12 +200,18 @@ def _vellum_upgrade(ssh, say):
 
     Required after an OS upgrade — Vellum blocks add/update until packages
     are re-synced. Can take several minutes on first run.
+
+    Non-fatal: network errors or apk failures are logged but don't abort
+    the install. If packages were installed in a prior attempt the
+    subsequent ensure_* checks will find them and skip re-installation.
     """
     say("Syncing packages to firmware (may take a few minutes)...")
     out, err, code = ssh.exec("vellum upgrade 2>&1", timeout=360)
     combined = (out or "") + (err or "")
     if code != 0 and "already" not in combined.lower() and "up to date" not in combined.lower():
-        raise RuntimeError(f"vellum upgrade failed: {combined.strip()}")
+        # Non-fatal — apk/network errors here don't necessarily mean installed
+        # packages are broken. Continue and let the ensure_* steps verify state.
+        say(f"Warning: vellum upgrade returned non-zero — continuing anyway")
 
 
 def _ensure_xovi(ssh, say):
