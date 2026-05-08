@@ -35,23 +35,19 @@ if mountpoint -q /opt 2>/dev/null; then
     umount /opt 2>/dev/null && log "autostart: unmounted /opt"
 fi
 
-# Stop xochitl before calling xovi/start.  If xochitl is already running when
-# xovi/start is called, its internal "systemctl start xochitl" is a no-op and
-# xochitl keeps running without XOVI — AppLoad never appears in the menu.
-# Stopping first ensures xovi/start does a fresh xochitl launch with XOVI loaded.
-log "autostart: stopping xochitl for XOVI reload"
-systemctl stop xochitl 2>/dev/null || true
-sleep 2
-kill $(pidof xochitl) 2>/dev/null || true
-
 # Activate XOVI — creates tmpfs overlays in /etc/systemd/system/xochitl.service.d/
-# and starts xochitl with LD_PRELOAD=xovi.so.
+# and restarts xochitl with LD_PRELOAD=xovi.so.
+#
+# Do NOT stop xochitl before this call.  /home mounts right after the user
+# enters their PIN, so if we stop xochitl here the screen goes dark the instant
+# PIN is accepted — it looks like a freeze.  xovi/start handles the restart
+# internally (systemctl restart xochitl), so a pre-stop is not needed.
 #
 # IMPORTANT: do NOT export XOVI_ROOT here.  xovi/start sets it internally to the
-# correct per-service exthome path.  If we pre-set XOVI_ROOT to the XOVI install
-# root (/home/root/xovi), xovi/start skips its own assignment and xochitl inherits
-# the wrong path — qt-resource-rebuilder can't find the hashtable, AppLoad can't
-# inject its menu entry, and the hamburger menu is empty after reboot.
+# correct per-service exthome path.  Pre-setting it to the XOVI install root
+# (/home/root/xovi) causes xovi/start to skip its own assignment and xochitl
+# inherits the wrong path — qt-resource-rebuilder can't find the hashtable,
+# AppLoad can't inject its menu entry, and the hamburger menu is empty after reboot.
 log "autostart: running xovi/start"
 bash /home/root/xovi/start >> "$LOGFILE" 2>&1 || log "autostart: xovi/start exited non-zero"
 sleep 5
