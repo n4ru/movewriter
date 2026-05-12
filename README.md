@@ -6,6 +6,12 @@
   Use a Bluetooth keyboard with your reMarkable Move.
 </p>
 
+<p align="center">
+  <a href="https://github.com/n4ru/movewriter/actions/workflows/ci.yml"><img src="https://github.com/n4ru/movewriter/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/n4ru/movewriter/releases/latest"><img src="https://img.shields.io/github/v/release/n4ru/movewriter?include_prereleases&label=release" alt="Latest release"></a>
+  <a href="LICENSE.md"><img src="https://img.shields.io/badge/license-Unlicense-blue.svg" alt="License: Unlicense"></a>
+</p>
+
 ---
 
 > **Just want the app?** Download the ready-to-use version for Mac and Windows at [movewriter.com](https://movewriter.com). This repo is for developers who prefer to run from source.
