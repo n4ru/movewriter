@@ -1,0 +1,201 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel superseded runs on the same PR/branch to save runner minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # ── Static checks ────────────────────────────────────────────────
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install ruff
+        run: pip install ruff
+      - name: ruff check
+        run: ruff check .
+      - name: ruff format --check
+        run: ruff format --check .
+        continue-on-error: true  # Don't fail the build on style nits yet — keep advisory
+
+  # ── Unit tests across OS × Python matrix ─────────────────────────
+  test:
+    name: Tests (${{ matrix.os }} / Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ['3.10', '3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install Tk (Linux only — for tkinter import)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y python3-tk
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+      - name: Run pytest
+        run: pytest -v tests/
+
+  # ── Build the QML resource bundle (resources.rcc) ────────────────
+  build-nativeapp:
+    name: Build nativeapp resources (Qt6 rcc)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Qt6 tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qt6-base-dev-tools
+      - name: Compile resources.rcc
+        working-directory: nativeapp
+        run: |
+          # qt6-base-dev-tools installs rcc under /usr/lib/qt6/libexec/ rather than PATH.
+          # The build.sh script expects `rcc` in PATH, so symlink whichever location exists.
+          set -e
+          RCC_BIN=""
+          if command -v rcc >/dev/null 2>&1; then
+            RCC_BIN=$(command -v rcc)
+          elif command -v rcc-qt6 >/dev/null 2>&1; then
+            RCC_BIN=$(command -v rcc-qt6)
+          else
+            for p in /usr/lib/qt6/libexec/rcc \
+                     /usr/lib/x86_64-linux-gnu/qt6/libexec/rcc; do
+              if [ -x "$p" ]; then RCC_BIN="$p"; break; fi
+            done
+          fi
+          if [ -z "$RCC_BIN" ]; then
+            echo "Could not locate Qt6 rcc binary" >&2
+            dpkg -L qt6-base-dev-tools | grep -i rcc || true
+            exit 1
+          fi
+          echo "Using rcc at: $RCC_BIN"
+          sudo ln -sf "$RCC_BIN" /usr/local/bin/rcc
+          rcc --binary -o resources.rcc qml/application.qrc
+          ls -la resources.rcc
+      - name: Upload resources.rcc
+        uses: actions/upload-artifact@v4
+        with:
+          name: nativeapp-resources
+          path: nativeapp/resources.rcc
+          retention-days: 30
+
+  # ── Desktop binary for Windows ───────────────────────────────────
+  build-windows:
+    name: Build MoveWriter.exe (Windows)
+    needs: [lint, test, build-nativeapp]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Download nativeapp resources
+        uses: actions/download-artifact@v4
+        with:
+          name: nativeapp-resources
+          path: nativeapp/
+      - name: Install UPX (for binary compression)
+        run: choco install upx -y --no-progress
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+      - name: Build with PyInstaller
+        run: pyinstaller --noconfirm MoveWriter.spec
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MoveWriter-windows
+          path: dist/MoveWriter.exe
+          retention-days: 90
+
+  # ── Desktop bundle for macOS ─────────────────────────────────────
+  build-macos:
+    name: Build MoveWriter.app (macOS)
+    needs: [lint, test, build-nativeapp]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Download nativeapp resources
+        uses: actions/download-artifact@v4
+        with:
+          name: nativeapp-resources
+          path: nativeapp/
+      - name: Install UPX
+        run: brew install upx
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+      - name: Build with PyInstaller
+        run: pyinstaller --noconfirm MoveWriter.spec
+      - name: Zip .app bundle
+        run: |
+          cd dist
+          # PyInstaller produces both an unwrapped binary and the .app bundle;
+          # ship only the .app so users get the proper macOS experience.
+          if [ -d "MoveWriter.app" ]; then
+            zip -r MoveWriter-macOS.zip MoveWriter.app
+          else
+            zip -r MoveWriter-macOS.zip MoveWriter
+          fi
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MoveWriter-macos
+          path: dist/MoveWriter-macOS.zip
+          retention-days: 90
+
+  # ── GitHub Release on tag pushes (v*) ────────────────────────────
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: MoveWriter-windows
+          path: artifacts/
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: MoveWriter-macos
+          path: artifacts/
+      - name: Create / update release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/MoveWriter.exe
+            artifacts/MoveWriter-macOS.zip
+          generate_release_notes: true
+          fail_on_unmatched_files: true

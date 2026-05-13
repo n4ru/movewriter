@@ -1,6 +1,3 @@
-import tkinter as tk
-import threading
-
 from ui import styles
 from ui.main_screen import MainScreen
 from core.ssh_client import SSHClient

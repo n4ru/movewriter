@@ -987,7 +987,7 @@ def generate_qmap(layout_name):
 
     # Remove base entries that are overridden by punct
     punct_keycodes = {}
-    for kc, plain_u, plain_qt, shift_u, shift_qt in punct:
+    for kc, _plain_u, _plain_qt, _shift_u, _shift_qt in punct:
         punct_keycodes.setdefault(kc, set()).update([MOD_PLAIN, MOD_SHIFT])
 
     filtered = []

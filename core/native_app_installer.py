@@ -211,7 +211,7 @@ def _vellum_upgrade(ssh, say):
     if code != 0 and "already" not in combined.lower() and "up to date" not in combined.lower():
         # Non-fatal — apk/network errors here don't necessarily mean installed
         # packages are broken. Continue and let the ensure_* steps verify state.
-        say(f"Warning: vellum upgrade returned non-zero — continuing anyway")
+        say("Warning: vellum upgrade returned non-zero — continuing anyway")
 
 
 def _ensure_xovi(ssh, say):
