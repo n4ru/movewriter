@@ -215,26 +215,39 @@ def _vellum_upgrade(ssh, say):
 
 
 def _ensure_xovi(ssh, say):
-    _, _, code = ssh.exec(f"test -d {XOVI_DIR}", timeout=5)
-    if code != 0:
-        say("Installing XOVI...")
-        ssh.exec("vellum add xovi", timeout=180)
-        _, _, code = ssh.exec(f"test -d {XOVI_DIR}", timeout=5)
-        if code != 0:
-            raise RuntimeError("XOVI install failed")
+    """Install/update XOVI and the qt-resource-rebuilder extension.
 
-    # Update xovi and xovi-extensions to the latest firmware-compatible versions.
-    # xovi.so must match the running xochitl binary — a stale 3.26 build will
-    # freeze xochitl on 3.27.  Targeted 'vellum update' is more reliable than
-    # the full 'vellum upgrade' which can fail due to apk network errors.
-    say("Updating XOVI for current firmware...")
+    XOVI is a community extension framework — it does NOT ship with the
+    device, so on a fresh Move /home/root/xovi/ won't exist until we put it
+    there.  `vellum add` is idempotent (no-op when already installed), so
+    we don't bother checking first and just always run add+update for both
+    packages.
+
+    The `update` step is mandatory: xovi.so must match the running xochitl
+    binary, and a stale 3.26 build will freeze xochitl on 3.27.  Targeted
+    `vellum update <pkg>` is more reliable than the full `vellum upgrade`,
+    which can fail on transient apk network errors.
+
+    xovi-extensions provides qt-resource-rebuilder, which AppLoad needs to
+    inject its hamburger-menu entry into xochitl.
+    """
+    say("Installing/updating XOVI for current firmware...")
+    ssh.exec("vellum add xovi 2>&1 || true", timeout=180)
     ssh.exec("vellum update xovi 2>&1 || true", timeout=180)
 
-    # xovi-extensions provides qt-resource-rebuilder, which AppLoad requires to
-    # inject its hamburger-menu entry into xochitl.
-    say("Updating XOVI extensions (qt-resource-rebuilder)...")
-    ssh.exec("vellum update xovi-extensions 2>&1 || true", timeout=180)
+    say("Installing/updating XOVI extensions...")
     ssh.exec("vellum add xovi-extensions 2>&1 || true", timeout=180)
+    ssh.exec("vellum update xovi-extensions 2>&1 || true", timeout=180)
+
+    # Verify XOVI actually landed.  We silenced vellum's exit codes above so
+    # transient apk hiccups don't abort the install — this is the single
+    # point where we catch a real failure (no network, broken vellum, etc).
+    _, _, code = ssh.exec(f"test -d {XOVI_DIR}", timeout=5)
+    if code != 0:
+        raise RuntimeError(
+            "XOVI install failed — /home/root/xovi missing after vellum add. "
+            "Check network connectivity and that vellum is functional."
+        )
 
 
 def _appload_present(ssh):
