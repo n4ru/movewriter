@@ -85,14 +85,14 @@ The optional **Install on Move** button (in the *Native App (Experimental)* sect
 
 Open it from the Move's hamburger menu (☰) → AppLoad → MoveWriter.
 
-**Tested on Move OS 3.26.** The native app relies on community-maintained tools (XOVI and AppLoad) that are firmware-specific. To avoid breaking the install, **disable automatic updates** in your Move's settings. If a Move OS update happens, just uninstall the Native App from the desktop, update, and reinstall.
+**Tested on Move OS 3.26 and 3.27.** The native app relies on community-maintained tools (XOVI and AppLoad) that are firmware-specific. Each Move OS release tends to break something, so to avoid surprises **disable automatic updates** in your Move's settings. If a Move OS update happens, just uninstall the Native App from the desktop, update, and reinstall.
 
 What gets installed under the hood:
-- XOVI extension framework + AppLoad (via [Vellum](https://github.com/vellum-dev/vellum-cli))
+- XOVI extension framework + AppLoad (via [Vellum](https://github.com/vellum-dev/vellum-cli), with direct GitHub fallback when Vellum's OS gate is behind the firmware)
 - Python 3 (via entware) for the on-device backend
 - The MoveWriter QML app and Python backend
-- A small systemd service that reactivates XOVI on every boot
-- xochitl crash-protection drop-ins (see below)
+- A boot autostart service that re-activates XOVI on every reboot, with a safety net that brings xochitl back up if XOVI activation fails — the device never gets left with a dead UI
+- xochitl crash-protection drop-ins (watchdog disabled, emergency-service overridden so brief hangs don't trigger a reboot)
 
 Pairing keyboards from the Native App can cause a brief screen flicker (~10s) on Move 3.26 due to a firmware quirk. The crash-protection drop-ins make this a recoverable flicker rather than a frozen device. For first-time keyboard pairing, the desktop app is smoother — pair from there once, then use the Native App for day-to-day management.
 
